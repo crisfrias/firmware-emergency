@@ -1,4 +1,9 @@
 #include "ReliableRouter.h"
+#if EMERGENCY_METRICS
+static uint32_t emergencyReliableStarts = 0;
+static uint32_t emergencyAckEvents = 0;
+static uint32_t emergencyNakEvents = 0;
+#endif
 #include "AckProof.h"
 #include "Default.h"
 #include "MeshTypes.h"
@@ -28,6 +33,12 @@ ErrorCode ReliableRouter::send(meshtastic_MeshPacket *p)
     const bool retransmitting = p->want_ack;
 
     if (p->want_ack) {
+#if EMERGENCY_METRICS
+        ++emergencyReliableStarts;
+        if ((emergencyReliableStarts % 64U) == 1U)
+            LOG_INFO("EMG_RELIABLE,starts=%lu,acks=%lu,naks=%lu", (unsigned long)emergencyReliableStarts,
+                     (unsigned long)emergencyAckEvents, (unsigned long)emergencyNakEvents);
+#endif
         DEBUG_HEAP_BEFORE;
         auto copy = packetPool.allocCopy(*p);
         DEBUG_HEAP_AFTER("ReliableRouter::send", copy);
@@ -177,6 +188,10 @@ void ReliableRouter::sniffReceived(const meshtastic_MeshPacket *p, const meshtas
         if ((ackId || nakId) && ackProofPermitsAction(p, ackId ? ackId : nakId, ackId != 0) &&
             // Implicit ACKs from MQTT should not stop retransmissions
             !(isFromUs(p) && p->transport_mechanism == meshtastic_MeshPacket_TransportMechanism_TRANSPORT_MQTT)) {
+#if EMERGENCY_METRICS
+            if (ackId) ++emergencyAckEvents;
+            else ++emergencyNakEvents;
+#endif
             LOG_DEBUG("Received a %s for 0x%08x, stopping retransmissions", ackId ? "ACK" : "NAK", ackId);
             if (ackId) {
                 stopRetransmission(p->to, ackId);

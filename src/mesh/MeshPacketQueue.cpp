@@ -1,4 +1,5 @@
 #include "MeshPacketQueue.h"
+#include "EmergencyQueuePolicy.h"
 #include "NodeDB.h"
 #include "Throttle.h"
 #include "UptimeClock.h"
@@ -30,7 +31,30 @@ bool CompareMeshPacketFunc(const meshtastic_MeshPacket *p1, const meshtastic_Mes
     return (p1p != p2p) ? (p1p > p2p) : (!isFromUs(p1) && isFromUs(p2));
 }
 
-MeshPacketQueue::MeshPacketQueue(size_t _maxLen) : maxLen(_maxLen) {}
+MeshPacketQueue::MeshPacketQueue(size_t _maxLen) : maxLen(_maxLen)
+{
+    queue.reserve(maxLen);
+    queuedAt.reserve(maxLen);
+}
+
+size_t MeshPacketQueue::bestReadyIndex() const
+{
+    if (queue.empty()) return 0;
+#if EMERGENCY_QUEUE_AGING
+    // Delayed relays keep the original semantics and stay behind ready packets.
+    if (queue.front()->tx_after) return 0;
+    const uint32_t now = Time::getMillis();
+    size_t best = 0;
+    uint32_t high = EmergencyQueuePolicy::effective(queue[0]->priority, uint32_t(now - queuedAt[0]));
+    for (size_t i = 1; i < queue.size() && !queue[i]->tx_after; ++i) {
+        const uint32_t candidate = EmergencyQueuePolicy::effective(queue[i]->priority, uint32_t(now - queuedAt[i]));
+        if (candidate > high) { high = candidate; best = i; }
+    }
+    return best;
+#else
+    return 0;
+#endif
+}
 
 bool MeshPacketQueue::empty()
 {
@@ -69,9 +93,12 @@ void fixPriority(meshtastic_MeshPacket *p)
 /** enqueue a packet, return false if full */
 bool MeshPacketQueue::enqueue(meshtastic_MeshPacket *p, bool *dropped)
 {
+    fixPriority(p);
     // no space - try to replace a lower priority packet in the queue
     if (queue.size() >= maxLen) {
         bool replaced = replaceLowerPriorityPacket(p);
+        if (replaced) ++emergencyStats.evicted;
+        else ++emergencyStats.rejected;
         if (!replaced) {
             LOG_WARN("TX queue is full, and there is no lower-priority packet available to evict in favour of 0x%08x", p->id);
         }
@@ -87,7 +114,11 @@ bool MeshPacketQueue::enqueue(meshtastic_MeshPacket *p, bool *dropped)
 
     // Find the correct position using upper_bound to maintain a stable order
     auto it = std::upper_bound(queue.begin(), queue.end(), p, CompareMeshPacketFunc);
-    queue.insert(it, p); // Insert packet at the found position
+    const size_t pos = size_t(it - queue.begin());
+    queue.insert(it, p); // keep the current Meshtastic sort rules
+    queuedAt.insert(queuedAt.begin() + pos, Time::getMillis());
+    ++emergencyStats.accepted;
+    if (queue.size() > emergencyStats.peakSize) emergencyStats.peakSize = uint32_t(queue.size());
     return true;
 }
 
@@ -97,8 +128,14 @@ meshtastic_MeshPacket *MeshPacketQueue::dequeue()
         return NULL;
     }
 
-    auto *p = queue.front();
-    queue.erase(queue.begin()); // Remove the highest-priority packet
+    const size_t i = bestReadyIndex();
+    auto *p = queue[i];
+    const uint32_t wait = uint32_t(Time::getMillis() - queuedAt[i]);
+    ++emergencyStats.dequeued;
+    emergencyStats.totalWaitMs += wait;
+    if (wait > emergencyStats.maxWaitMs) emergencyStats.maxWaitMs = wait;
+    queuedAt.erase(queuedAt.begin() + i);
+    queue.erase(queue.begin() + i);
     return p;
 }
 
@@ -108,8 +145,7 @@ meshtastic_MeshPacket *MeshPacketQueue::getFront()
         return NULL;
     }
 
-    auto *p = queue.front();
-    return p;
+    return queue[bestReadyIndex()];
 }
 
 /** Get a packet from this queue. Returns a pointer to the packet, or NULL if not found. */
@@ -132,7 +168,10 @@ meshtastic_MeshPacket *MeshPacketQueue::remove(NodeNum from, PacketId id, bool t
         auto p = (*it);
         if (getFrom(p) == from && p->id == id && ((tx_normal && !p->tx_after) || (tx_late && p->tx_after)) &&
             (!hop_limit_lt || p->hop_limit < hop_limit_lt)) {
+            const size_t pos = size_t(it - queue.begin());
+            queuedAt.erase(queuedAt.begin() + pos);
             queue.erase(it);
+            ++emergencyStats.canceled;
             return p;
         }
     }
@@ -163,6 +202,7 @@ bool MeshPacketQueue::replaceLowerPriorityPacket(meshtastic_MeshPacket *p)
         LOG_WARN("Dropping packet 0x%08x to make room in the TX queue for higher-priority packet 0x%08x", backPacket->id, p->id);
         // Remove the back packet
         queue.pop_back();
+        queuedAt.pop_back();
         packetPool.release(backPacket);
         // Insert the new packet in the correct order
         enqueue(p);
@@ -178,6 +218,7 @@ bool MeshPacketQueue::replaceLowerPriorityPacket(meshtastic_MeshPacket *p)
         if (!refPacket->tx_after && refPacket->priority < p->priority) {
             LOG_WARN("Dropping non-late packet 0x%08x to make room in the TX queue for higher-priority packet 0x%08x",
                      refPacket->id, p->id);
+            queuedAt.erase(queuedAt.begin() + (it - queue.begin()));
             queue.erase(it);
             packetPool.release(refPacket);
             // Insert the new packet in the correct order
@@ -207,6 +248,7 @@ bool MeshPacketQueue::replaceLowerPriorityPacket(meshtastic_MeshPacket *p)
                          backPacket->id, dt, p->id);
             }
             queue.pop_back();
+            queuedAt.pop_back();
             packetPool.release(backPacket);
             // Insert the new packet in the correct order
             enqueue(p);

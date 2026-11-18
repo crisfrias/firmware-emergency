@@ -3,14 +3,25 @@
 #include "MeshTypes.h"
 
 #include <queue>
+#include <vector>
+#include <stdint.h>
 
 /**
  * A priority queue of packets
  */
+struct EmergencyQueueStats {
+    uint32_t accepted = 0, evicted = 0, rejected = 0, canceled = 0, dequeued = 0;
+    uint32_t peakSize = 0, maxWaitMs = 0;
+    uint64_t totalWaitMs = 0;
+};
+
 class MeshPacketQueue
 {
     size_t maxLen;
     std::vector<meshtastic_MeshPacket *> queue;
+    std::vector<uint32_t> queuedAt; // parallel to queue, enqueue timestamp, monotonic ms
+    EmergencyQueueStats emergencyStats;
+    size_t bestReadyIndex() const;
 
     /** Replace a lower priority package in the queue with 'mp' (provided there are lower pri packages). Return true if replaced.
      */
@@ -18,6 +29,7 @@ class MeshPacketQueue
 
   public:
     explicit MeshPacketQueue(size_t _maxLen);
+    EmergencyQueueStats getEmergencyStats() const { return emergencyStats; }
 
     /** enqueue a packet, return false if full
      * @param dropped Optional pointer to a bool that will be set to true if a packet was dropped

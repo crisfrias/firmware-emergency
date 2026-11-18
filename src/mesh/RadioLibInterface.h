@@ -110,6 +110,9 @@ class STM32WLx_ModuleWrapper : public STM32WLx_Module
 class RadioLibInterface : public RadioInterface, protected concurrency::NotifiedWorkerThread
 {
     MeshPacketQueue txQueue = MeshPacketQueue(MAX_TX_QUEUE);
+    uint32_t emergencyCadBusy = 0;
+    uint32_t emergencyCadFree = 0;
+    uint32_t emergencyTxStarted = 0;
 
   protected:
     /// Used as our notification from the ISR

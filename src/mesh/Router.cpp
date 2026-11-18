@@ -1,4 +1,7 @@
 #include "Router.h"
+#if EMERGENCY_APP_PRIORITY
+#include "modules/optional/Emergency/EmergencyWire.h"
+#endif
 #include "AdminKeys.h"
 #include "Channels.h"
 #include "CryptoEngine.h"
@@ -319,15 +322,30 @@ int32_t Router::runOnce()
  */
 void Router::enqueueReceivedMessage(meshtastic_MeshPacket *p)
 {
+#if EMERGENCY_METRICS
+    static uint32_t emergencyRxEvictions = 0;
+    static uint32_t emergencyRxAccepted = 0;
+#endif
     // Try enqueue until successful
     while (!fromRadioQueue.enqueue(p, 0)) {
         meshtastic_MeshPacket *old_p;
         old_p = fromRadioQueue.dequeuePtr(0); // Dequeue and discard the oldest packet
         if (old_p) {
+#if EMERGENCY_METRICS
+            ++emergencyRxEvictions;
+            if ((emergencyRxEvictions % 16U) == 1U)
+                LOG_WARN("EMG_RXQ,drop_oldest_total=%lu", (unsigned long)emergencyRxEvictions);
+#endif
             printPacket("fromRadioQ full, drop oldest!", old_p);
             packetPool.release(old_p);
         }
     }
+#if EMERGENCY_METRICS
+    ++emergencyRxAccepted;
+    if ((emergencyRxAccepted % 128U) == 1U)
+        LOG_INFO("EMG_RXQ,accepted=%lu,evicted=%lu", (unsigned long)emergencyRxAccepted,
+                 (unsigned long)emergencyRxEvictions);
+#endif
     // Nasty hack because our threading is primitive.  interfaces shouldn't need to know about routers FIXME
     setReceivedMessage();
 }
@@ -444,6 +462,18 @@ ErrorCode Router::sendLocal(meshtastic_MeshPacket *p, RxSource src)
         // Coordinates never go out on the event channel: any local originator (phone, module, UI) that aimed
         // one there is moved onto the position channel instead. Before the loopback below so the local copy
         // carries the channel it will actually be sent on.
+#if EMERGENCY_APP_PRIORITY
+        // Priority remains local to the node. No on-air header changes and no relay priority inference.
+        // A valid custom payload from this node is identified as an emergency alert.
+        if (isFromUs(p) && p->which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
+            p->decoded.portnum == meshtastic_PortNum_PRIVATE_APP) {
+            EmergencyWire::Message e = {};
+            if (EmergencyWire::parse(p->decoded.payload.bytes, p->decoded.payload.size, e) &&
+                e.kind == EmergencyWire::Kind::Alert && e.originNode == getNodeNum()) {
+                p->priority = meshtastic_MeshPacket_Priority_ALERT;
+            }
+        }
+#endif
         coerceCoordinatePacketToPositionChannel(p);
 
         // If we are sending a broadcast, we also treat it as if we just received it ourself

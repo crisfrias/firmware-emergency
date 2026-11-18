@@ -679,12 +679,14 @@ void RadioLibInterface::onNotify(uint32_t notification)
                     const bool channelActive = isChannelActive();
                     scanForTx = nullptr;
                     if (channelActive) { // currently traffic on the channel?
+                        ++emergencyCadBusy;
                         LOG_DEBUG_RADIO("CAD busy");
                         // Beacon target or not: reconfigureForBeaconTX() already left RX running on that
                         // config, so skipping this only ever left the node deaf in standby.
                         rearmReceive();
                         setTransmitDelay();
                     } else {
+                        ++emergencyCadFree;
                         LOG_DEBUG_RADIO("CAD free");
                         if (peek)
                             LOG_DEBUG_RADIO("Preamble hold released, CAD clear %ums after the sighting",
@@ -1206,6 +1208,14 @@ void RadioLibInterface::checkStaleRxFlags()
 
 void RadioLibInterface::periodicRadioMaintenance()
 {
+#if EMERGENCY_METRICS
+    const auto emg = txQueue.getEmergencyStats();
+    LOG_INFO("EMG_TXQ,accepted=%lu,evicted=%lu,rejected=%lu,canceled=%lu,dequeued=%lu,peak=%lu,wait_max_ms=%lu,wait_avg_ms=%lu,tx_started=%lu,cad_busy=%lu,cad_free=%lu",
+             (unsigned long)emg.accepted, (unsigned long)emg.evicted, (unsigned long)emg.rejected,
+             (unsigned long)emg.canceled, (unsigned long)emg.dequeued, (unsigned long)emg.peakSize,
+             (unsigned long)emg.maxWaitMs, (unsigned long)(emg.dequeued ? emg.totalWaitMs / emg.dequeued : 0U),
+             (unsigned long)emergencyTxStarted, (unsigned long)emergencyCadBusy, (unsigned long)emergencyCadFree);
+#endif
     // Every startReceive() call site is event-driven (RX/TX ISR, the CAD-busy branch, reconfigure), and a
     // radio left with RX off can no longer raise an RX interrupt - on a node with nothing to transmit
     // nothing would ever re-arm it. This periodic tick is that retry; maybeRecoverChipStateLoss() throttles.
@@ -1561,6 +1571,7 @@ bool RadioLibInterface::startSend(meshtastic_MeshPacket *txp)
             // bits
             enableInterrupt(isrTxLevel0);
             // unset-sentinel-ok: busyTx/sendingPacket is the armed flag, so 0 is a legal stamp
+            ++emergencyTxStarted;
             lastTxStart = Time::getMillis();
             printPacket("Started Tx", txp);
 #ifdef LED_LORA
