@@ -12,25 +12,15 @@
 
 namespace EmergencyRelayPriority {
 
-inline bool authorized(uint32_t nodeNum)
-{
-    if (nodeNum == 0 || nodeNum == UINT32_MAX)
-        return false;
-    for (uint32_t allowed : EMERGENCY_AUTHORIZED_ORIGINS) {
-        if (allowed != 0 && allowed == nodeNum)
-            return true;
-    }
-    return false;
-}
-
 // readOnly eligibility. Must be called AFTER the existing Meshtastic decode and
 // authentication gates: 'xeddsa_signed' is strictly local metadata set only by
 // a successfully verified sender signature, not a field supplied by the peer.
-// A matching NodeNum alone is intentionally insufficient for relay elevation.
+// A valid NodeNum alone is insufficient for relay elevation: require verified XEdDSA.
 template <typename Packet> inline bool eligible(const Packet &p, bool requireVerifiedSignature)
 {
     if (p.which_payload_variant != meshtastic_MeshPacket_decoded_tag ||
-        p.decoded.portnum != meshtastic_PortNum_PRIVATE_APP || p.pki_encrypted || !authorized(p.from))
+        p.decoded.portnum != meshtastic_PortNum_PRIVATE_APP || p.pki_encrypted ||
+        !EmergencyOriginPolicy::validNodeNum(p.from))
         return false;
     if (requireVerifiedSignature && !p.xeddsa_signed)
         return false;
@@ -59,10 +49,11 @@ template <typename Packet> inline bool promoteRelay(Packet &p)
 
 template <typename Packet> inline bool promoteLocal(Packet &p, uint32_t localNodeNum)
 {
+    // OPEN-SOS: todos los NodeNum válidos pueden enviar ALERT, sin allowlist.
     // PhoneAPI may supply from=0, which Router::send() later resolves to the
     // local NodeNum. Do not mistake that legitimate convention for an unlisted
-    // sender; ALWAYS evaluate authorization against the true local NodeNum.
-    if (!authorized(localNodeNum) || (p.from && p.from != localNodeNum) ||
+    // sender; ALWAYS evaluate identity against the true local NodeNum.
+    if (!EmergencyOriginPolicy::validNodeNum(localNodeNum) || (p.from && p.from != localNodeNum) ||
         p.which_payload_variant != meshtastic_MeshPacket_decoded_tag ||
         p.decoded.portnum != meshtastic_PortNum_PRIVATE_APP || p.pki_encrypted)
         return false;
