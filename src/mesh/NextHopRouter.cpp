@@ -1,4 +1,7 @@
 #include "NextHopRouter.h"
+#if EMERGENCY_PER_HOP_PRIORITY
+#include "modules/optional/Emergency/EmergencyRelayPriority.h"
+#endif
 #include "Default.h"
 #include "MeshTypes.h"
 #include "Throttle.h"
@@ -274,6 +277,15 @@ bool NextHopRouter::perhapsRebroadcast(const meshtastic_MeshPacket *p)
                     meshtastic_MeshPacket *tosend = packetPool.allocCopy(*p); // keep a copy because we will be sending it
                     if (!tosend)
                         return true;
+#if EMERGENCY_PER_HOP_PRIORITY
+                    // The incoming packet was authenticated/decrypted before reaching sniffReceived().
+                    // This local flag survives the copy but never appears in the on-air packet.
+                    // Promote only authorized XEdDSA-verified EMG1 ALERTs, never opaque/unsigned packets.
+                    if (EmergencyRelayPriority::promoteRelay(*tosend)) {
+                        LOG_INFO("EMG_RELAY_PRIORITY,from=%08x,mesh_id=%08x,priority=%u", tosend->from,
+                                 tosend->id, (unsigned)tosend->priority);
+                    }
+#endif
                     LOG_INFO("Rebroadcast msg from %x", p->relay_node);
 
                     // If exhausting hops, force hop_limit = 0 regardless of other logic

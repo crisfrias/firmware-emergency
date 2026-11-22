@@ -1,6 +1,6 @@
 #include "Router.h"
 #if EMERGENCY_APP_PRIORITY
-#include "modules/optional/Emergency/EmergencyWire.h"
+#include "modules/optional/Emergency/EmergencyRelayPriority.h"
 #endif
 #include "AdminKeys.h"
 #include "Channels.h"
@@ -463,15 +463,10 @@ ErrorCode Router::sendLocal(meshtastic_MeshPacket *p, RxSource src)
         // one there is moved onto the position channel instead. Before the loopback below so the local copy
         // carries the channel it will actually be sent on.
 #if EMERGENCY_APP_PRIORITY
-        // Priority remains local to the node. No on-air header changes and no relay priority inference.
-        // A valid custom payload from this node is identified as an emergency alert.
-        if (isFromUs(p) && p->which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
-            p->decoded.portnum == meshtastic_PortNum_PRIVATE_APP) {
-            EmergencyWire::Message e = {};
-            if (EmergencyWire::parse(p->decoded.payload.bytes, p->decoded.payload.size, e) &&
-                e.kind == EmergencyWire::Kind::Alert && e.originNode == getNodeNum()) {
-                p->priority = meshtastic_MeshPacket_Priority_ALERT;
-            }
+        // Experimental local priority requires allowlisted local origin.
+        // Actual relay priority requires XEdDSA-verified sender signature.
+        if (isFromUs(p) && EmergencyRelayPriority::promoteLocal(*p, getNodeNum())) {
+            LOG_INFO("EMG_LOCAL_PRIORITY,from=%08x,id=%08x", p->from, p->id);
         }
 #endif
         coerceCoordinatePacketToPositionChannel(p);
