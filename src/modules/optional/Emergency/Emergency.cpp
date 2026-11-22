@@ -33,13 +33,6 @@ class EmergencyModule : public SinglePortModule
     StoredAlert stored[EMERGENCY_STORED_ALERTS] = {};
     size_t storedNext = 0;
 
-    bool authorized(uint32_t from) const
-    {
-        for (uint32_t node : EMERGENCY_AUTHORIZED_ORIGINS) {
-            if (node != 0 && from == node) return true;
-        }
-        return false;
-    }
     bool isDuplicate(uint32_t origin, uint32_t id)
     {
         const uint32_t now = Time::getMillis();
@@ -99,7 +92,7 @@ class EmergencyModule : public SinglePortModule
     void sendReceipt(const meshtastic_MeshPacket &rx, const EmergencyWire::Message &alert)
     {
 #if EMERGENCY_ENABLE_RECEIPTS
-        // Only reply to directed, authorized, channel-encrypted app alerts. Never ACK a broadcast.
+        // Only reply to directed, channel-encrypted app alerts. Never ACK a broadcast.
         if (rx.to != nodeDB->getNodeNum() || rx.pki_encrypted || !(alert.flags & 1)) return;
         const uint32_t now = Time::getMillis();
         if (lastReceiptMs && uint32_t(now - lastReceiptMs) < EMERGENCY_RECEIPT_COOLDOWN_MS) return;
@@ -133,9 +126,11 @@ class EmergencyModule : public SinglePortModule
         // A receipt can be sent by another node but still refers to the original alert origin.
         if ((msg.kind == EmergencyWire::Kind::Alert || msg.kind == EmergencyWire::Kind::Resolved) &&
             msg.originNode != from) return ProcessMessage::CONTINUE;
-        if (msg.kind == EmergencyWire::Kind::Replay && !authorized(msg.originNode)) return ProcessMessage::CONTINUE;
-        if (!authorized(from)) {
-            LOG_WARN("EMG_APP_REJECT,unauthorized_from=%08x,id=%08x", from, msg.id);
+        if (msg.kind == EmergencyWire::Kind::Replay && !EmergencyOriginPolicy::validNodeNum(msg.originNode)) return ProcessMessage::CONTINUE;
+        // OPEN-SOS: cualquier identidad de nodo válida puede pedir ayuda.
+        // No implica autenticación: la firma verificada es una señal separada.
+        if (!EmergencyOriginPolicy::validNodeNum(from)) {
+            LOG_WARN("EMG_APP_REJECT,invalid_from=%08x,id=%08x", from, msg.id);
             return ProcessMessage::CONTINUE;
         }
         if (msg.expiresUnix != 0 && getRTCQuality() >= RTCQualityFromNet &&

@@ -463,7 +463,7 @@ ErrorCode Router::sendLocal(meshtastic_MeshPacket *p, RxSource src)
         // one there is moved onto the position channel instead. Before the loopback below so the local copy
         // carries the channel it will actually be sent on.
 #if EMERGENCY_APP_PRIORITY
-        // Experimental local priority requires allowlisted local origin.
+        // OPEN-SOS: cualquier NodeNum local válido puede emitir ALERT.
         // Actual relay priority requires XEdDSA-verified sender signature.
         if (isFromUs(p) && EmergencyRelayPriority::promoteLocal(*p, getNodeNum())) {
             LOG_INFO("EMG_LOCAL_PRIORITY,from=%08x,id=%08x", p->from, p->id);
