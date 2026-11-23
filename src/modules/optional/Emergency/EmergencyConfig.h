@@ -18,3 +18,9 @@ static constexpr uint32_t EMERGENCY_RECEIPT_COOLDOWN_MS = 2000;
 #ifndef EMERGENCY_ENABLE_RECEIPTS
 #define EMERGENCY_ENABLE_RECEIPTS 1
 #endif
+
+// Optional ZeroInfra EMG1 SOS location diagnostic (GPS prefix: @lat,lon SOS).
+// Does not influence transmission priority or acceptance of SOS without GPS.
+#ifndef EMERGENCY_GPS_TEXT_TRACE
+#define EMERGENCY_GPS_TEXT_TRACE 1
+#endif

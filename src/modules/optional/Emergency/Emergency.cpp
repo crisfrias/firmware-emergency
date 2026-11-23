@@ -5,6 +5,7 @@
 #if EMERGENCY_ENABLE_MODULE
 #include "EmergencyConfig.h"
 #include "EmergencyWire.h"
+#include "EmergencyGpsText.h"
 #include "mesh/SinglePortModule.h"
 #include "mesh/MeshService.h"
 #include "mesh/NodeDB.h"
@@ -149,6 +150,18 @@ class EmergencyModule : public SinglePortModule
         if (isDuplicate(keySender, msg.id ^ (kindCode << 24))) return ProcessMessage::CONTINUE;
         LOG_INFO("EMG_APP_RX,kind=%u,origin=%08x,from=%08x,id=%08x,severity=%u",
                  unsigned(static_cast<uint8_t>(msg.kind)), msg.originNode, from, msg.id, unsigned(msg.severity));
+#if EMERGENCY_GPS_TEXT_TRACE
+        // GPS is optional metadata inside the existing EMG1 v1 UTF-8 text.
+        // Log only accepted alerts/replays; do not change rebroadcast behavior.
+        if (msg.kind == EmergencyWire::Kind::Alert || msg.kind == EmergencyWire::Kind::Replay) {
+            EmergencyGpsText::Position gps = {};
+            if (EmergencyGpsText::parse(msg.text, msg.textSize, gps)) {
+                LOG_INFO("EMG_GPS_RX,kind=%u,origin=%08x,id=%08x,lat_e5=%d,lon_e5=%d",
+                         unsigned(static_cast<uint8_t>(msg.kind)), msg.originNode, msg.id,
+                         int(gps.latitudeE5), int(gps.longitudeE5));
+            }
+        }
+#endif
         if (msg.kind == EmergencyWire::Kind::Alert) {
             storeAlert(mp, msg); // bounded, RAM-only, no automatic retransmission
             sendReceipt(mp, msg);
